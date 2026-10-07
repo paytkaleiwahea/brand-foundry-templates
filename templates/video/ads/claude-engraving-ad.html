@@ -1,0 +1,494 @@
+<!doctype html>
+<!--
+  CLAUDE ENGRAVING AD · video / ads
+  A fast 14.5 s brand spot in bold light mode. Public-domain engravings and
+  museum photographs (see assets/engraving/SOURCES.md) cut every 0.16 to 1.4 s,
+  with the accent spark and brush marks painted over them, three word morphs
+  (ask > task, draft > craft, think > ink > tagline), an extruded 3D spark, and a
+  resolve on the spark + wordmark lockup.
+  Structure follows the reference post at prompt-motion.com/lexnlin-038035; the
+  design, cut list and motion are rebuilt from scratch.
+  Seek-safe: every element property is owned by one tween. Beats show and hide
+  through one windowed tween each, so the editor preview and the renderer agree.
+  Word positions are measured after web fonts load and stored in CSS variables
+  that the timeline interpolates, so a refit never touches a tweened property.
+-->
+<html lang="en"
+  data-composition-variables='[{"id":"morph1","type":"string","group":"Words","label":"Morph one (from|to)","default":"ask|task","description":"Two words separated by |. Letters they share slide into place."},{"id":"morph2","type":"string","group":"Words","label":"Morph two (from|to)","default":"draft|craft"},{"id":"morph3","type":"string","group":"Words","label":"Morph three (from|to)","default":"think|ink"},{"id":"tagline","type":"string","group":"Words","label":"Tagline (two lines)","default":"Keep|thinking.","description":"Line one|line two. The last word of morph three slides into line two where they share letters."},{"id":"wordmark","type":"string","group":"Words","label":"Wordmark","default":"Claude"},{"id":"accentColor","type":"color","group":"Brand","label":"Spark and paint","default":"#D97757"},{"id":"textColor","type":"color","group":"Brand","label":"Ink","default":"#141413"},{"id":"bgColor","type":"color","group":"Brand","label":"Paper","default":"#FFFFFF"},{"id":"headingFont","type":"font","group":"Brand","label":"Serif font","default":""}]'
+>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width={{WIDTH}}, height={{HEIGHT}}" />
+    <title>Claude Engraving Ad {{LABEL}}</title>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400..800;1,8..60,400..800&display=swap" rel="stylesheet" />
+    <style>
+      body { margin: 0; }
+      :root { --serif: "Source Serif 4", Georgia, serif; }
+      #root { --bgColor: #FFFFFF; --textColor: #141413; --accentColor: #D97757;
+        position: relative; width: {{WIDTH}}px; height: {{HEIGHT}}px; overflow: hidden;
+        background: var(--bgColor); color: var(--textColor); font-family: var(--serif); }
+      /* Design stage is 1080x1920. Everything that matters sits in the central 1080x1350
+         band, so 4:5 crops only margin and 16:9 scales the band to the frame height. */
+      #stage { position: absolute; width: 1080px; height: 1920px; left: 0; top: 0; transform-origin: 0 0; }
+      .beat { position: absolute; inset: 0; visibility: hidden; opacity: 0; }
+      .abs { position: absolute; }
+      .pt { position: absolute; width: 0; height: 0; }
+      .bleed { position: absolute; left: -800px; right: -800px; top: -200px; bottom: -200px; }
+      img { display: block; user-select: none; }
+      .ink { mix-blend-mode: multiply; }
+      .dot { position: absolute; border-radius: 50%; background: var(--accentColor); }
+      svg { overflow: visible; }
+      svg .paint { fill: none; stroke: var(--accentColor); stroke-linecap: round; stroke-linejoin: round; }
+      svg .line { fill: none; stroke: var(--textColor); stroke-linecap: round; }
+
+      /* spark: rays are HTML boxes, so the same markup works flat and in 3D */
+      .spark { position: absolute; width: 0; height: 0; }
+      .spark .ray, .spark .len { position: absolute; left: 0; top: 0; width: 0; height: 0; }
+      .spark .grow { position: absolute; transform-origin: 50% 100%; }
+      .spark .grow svg { display: block; width: 100%; height: 100%; }
+      .spark .disc { position: absolute; border-radius: 50%; background: var(--accentColor); }
+      .spark path { fill: var(--accentColor); }
+      /* a spark that travels between two measured points: --c runs 0 (from) to 1 (to) */
+      .travel { left: calc((var(--fx, 0) + (var(--tx, 0) - var(--fx, 0)) * var(--c, 0)) * 1px);
+                top: calc((var(--fy, 0) + (var(--ty, 0) - var(--fy, 0)) * var(--c, 0)) * 1px); }
+
+      /* words: each letter is .ch (slides by --p) > i (enters) > j (exits) */
+      .word { position: absolute; left: 540px; width: 0; height: 0; font-weight: 680;
+        font-variation-settings: "opsz" 60; letter-spacing: -0.02em; white-space: nowrap; }
+      .ch { position: absolute; left: 0; bottom: 0; line-height: 1;
+        transform: translateX(calc((var(--xa, 0) + (var(--xb, 0) - var(--xa, 0)) * var(--p, 0)) * 1px)); }
+      .ch span { display: block; transform-origin: 50% 80%; }
+      .ch.accent span { color: var(--accentColor); }
+      .brush { position: absolute; }
+      #measure { position: absolute; left: -9999px; top: 0; white-space: pre; font-family: "Source Serif 4", Georgia, serif;
+        font-weight: 680; font-variation-settings: "opsz" 60; letter-spacing: -0.02em; line-height: 1; }
+
+      .disc-mask { position: absolute; border-radius: 50%; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+      .disc-mask img { flex: none; }
+      .disc-mask .stack { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+      .flake { position: absolute; width: 230px; height: 230px; margin: -115px 0 0 -115px;
+        -webkit-mask-image: radial-gradient(circle, #000 56%, transparent 70%); mask-image: radial-gradient(circle, #000 56%, transparent 70%); }
+      .flake img { width: 100%; height: 100%; }
+      .horse { position: absolute; width: 230px; height: 124px; margin: -62px 0 0 -115px; }
+      .horse img { width: 100%; }
+    </style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="claude-engraving-ad" data-start="0" data-fps="60"
+         data-width="{{WIDTH}}" data-height="{{HEIGHT}}" data-duration="14.5">
+      <section id="clip" class="clip" data-start="0" data-duration="14.5" data-track-index="1"
+               style="position:absolute;inset:0;">
+        <div id="stage"></div>
+      </section>
+    </div>
+    <div id="measure"></div>
+    <script>
+      const vars = window.__hyperframes?.getVariables?.() ?? window.__studio?.getVariables?.() ?? {};
+      const root = document.getElementById("root"), stage = document.getElementById("stage");
+      const measure = document.getElementById("measure");
+      const text = (k, f) => String(vars[k] ?? f).trim() || f;
+      for (const k of ["bgColor", "textColor", "accentColor"]) if (vars[k]) root.style.setProperty("--" + k, vars[k]);
+      if (vars.headingFont) { root.style.setProperty("--serif", vars.headingFont); measure.style.fontFamily = vars.headingFont; }
+      const css = getComputedStyle(root);
+      const ACC = css.getPropertyValue("--accentColor").trim(), INK = css.getPropertyValue("--textColor").trim();
+      const W = {{WIDTH}}, H = {{HEIGHT}};
+      const S = Math.min(W / 1080, H / 1350);
+      stage.style.transform = `translate(${(W - 1080 * S) / 2}px, ${(H - 1920 * S) / 2}px) scale(${S})`;
+      const pair = (k, f) => { const d = f.split("|"), p = text(k, f).split("|").map(s => s.trim()).filter(Boolean); return [p[0] || d[0], p[1] || d[1]]; };
+      const M1 = pair("morph1", "ask|task"), M2 = pair("morph2", "draft|craft"), M3 = pair("morph3", "think|ink");
+      const TAG = pair("tagline", "Keep|thinking."), MARK = text("wordmark", "Claude");
+      const A = "assets/engraving/", NS = "http://www.w3.org/2000/svg";
+
+      // ---------- DOM helpers ----------
+      const el = (tag, cls, parent, style) => { const e = document.createElement(tag); if (cls) e.className = cls; if (style) Object.assign(e.style, style); (parent || stage).appendChild(e); return e; };
+      const img = (src, parent, style, cls) => { const i = el("img", cls || "", parent, style); i.src = A + src; i.alt = ""; return i; };
+      const svg = (parent, w = 1080, h = 1920, style) => { const s = document.createElementNS(NS, "svg"); s.setAttribute("width", w); s.setAttribute("height", h); s.setAttribute("viewBox", `0 0 ${w} ${h}`); Object.assign(s.style, { position: "absolute", left: 0, top: 0 }, style || {}); parent.appendChild(s); return s; };
+      const stroke = (s, d, cls, sw) => { const p = document.createElementNS(NS, "path"); p.setAttribute("d", d); p.setAttribute("class", cls); p.setAttribute("stroke-width", sw); p.setAttribute("pathLength", "1"); p.style.strokeDasharray = "1 1.1"; p.style.strokeDashoffset = "1.05"; s.appendChild(p); return p; };
+      const dot = (parent, x, y, d) => el("div", "dot", parent, { left: x - d / 2 + "px", top: y - d / 2 + "px", width: d + "px", height: d + "px" });
+      const arcD = (cx, cy, r, start, sweep) => {
+        const a0 = start * Math.PI / 180, a1 = (start + sweep) * Math.PI / 180;
+        return `M ${cx + r * Math.cos(a0)} ${cy + r * Math.sin(a0)} A ${r} ${r} 0 ${sweep > 180 ? 1 : 0} 1 ${cx + r * Math.cos(a1)} ${cy + r * Math.sin(a1)}`;
+      };
+      // A hand-painted mark drawn in a 100x100 box, re-plotted onto the measured box it marks.
+      const brush = (parent, d, sw, cls = "paint") => {
+        const s = document.createElementNS(NS, "svg"); s.setAttribute("class", "brush"); parent.appendChild(s);
+        const p = stroke(s, d, cls, sw);
+        return { svg: s, path: p, place(x, y, w, h) {
+          Object.assign(s.style, { left: x + "px", top: y + "px", width: w + "px", height: h + "px" }); s.setAttribute("viewBox", `0 0 ${w} ${h}`);
+          p.setAttribute("d", d.replace(/(-?[\d.]+)[ ,]+(-?[\d.]+)/g, (_, px, py) => `${px * w / 100} ${py * h / 100}`));
+        } };
+      };
+
+      // ---------- the spark: 12 tapered rays around a disc ----------
+      const RAY_ANG = [0, 31, 58, 91, 119, 152, 179, 211, 238, 271, 299, 331];
+      const RAY_LEN = [1, .84, .96, .8, .98, .88, .86, .97, .83, 1, .85, .93];
+      function makeSpark(parent, x, y, R, opts = {}) {
+        const s = el("div", "spark" + (opts.travel ? " travel" : ""), parent, opts.travel ? {} : { left: x + "px", top: y + "px" });
+        const lens = [], rays = RAY_ANG.map((a, i) => {
+          const L = R * RAY_LEN[i], w = R * .2, t = w * .26, b = w * .5;
+          const ray = el("div", "ray", s, { transform: `rotate(${a}deg)` });
+          const len = el("div", "len", ray); lens.push(len);
+          const grow = el("div", "grow", len, { left: -w / 2 + "px", top: -L + "px", width: w + "px", height: L + "px" });
+          const sv = document.createElementNS(NS, "svg"); sv.setAttribute("viewBox", `0 0 ${w} ${L}`); sv.setAttribute("preserveAspectRatio", "none");
+          const p = document.createElementNS(NS, "path");
+          p.setAttribute("d", `M ${w / 2 - b} ${L} L ${w / 2 - t} ${t} A ${t} ${t} 0 0 1 ${w / 2 + t} ${t} L ${w / 2 + b} ${L} Z`);
+          if (opts.fill) p.style.fill = opts.fill;
+          sv.appendChild(p); grow.appendChild(sv);
+          return grow;
+        });
+        const d = R * (opts.disc ?? .34);
+        const disc = el("div", "disc", s, { left: -d / 2 + "px", top: -d / 2 + "px", width: d + "px", height: d + "px" });
+        if (opts.fill) disc.style.background = opts.fill;
+        return { el: s, rays, lens, disc };
+      }
+
+      // ---------- words ----------
+      function layout(word, size) {
+        measure.style.fontSize = size + "px"; measure.textContent = word;
+        const node = measure.firstChild, r = document.createRange(), box = measure.getBoundingClientRect();
+        const xs = [...word].map((_, i) => { r.setStart(node, i); r.setEnd(node, i + 1); return r.getBoundingClientRect().left - box.left; });
+        const ws = [...word].map((_, i) => { r.setStart(node, i); r.setEnd(node, i + 1); return r.getBoundingClientRect().width; });
+        return { xs: xs.map(x => x - box.width / 2), ws, width: box.width };
+      }
+      function common(a, b) {
+        let best = { len: 0, ia: 0, ib: 0 };
+        for (let i = 0; i < a.length; i++) for (let j = 0; j < b.length; j++) {
+          let k = 0; while (a[i + k] && a[i + k] === b[j + k]) k++;
+          if (k > best.len) best = { len: k, ia: i, ib: j };
+        }
+        return best;
+      }
+      const fits = [];
+      // Letters for a morph from a to b. The longest shared run slides, the rest leave or arrive.
+      function makeMorph(parent, a, b, y, size, maxW) {
+        const box = el("div", "word", parent, { top: y + "px" });
+        const c = common(a, b), shared = [], outs = [], ins = [];
+        const mk = ch => { const o = el("div", "ch", box), i = el("span", "", o), j = el("span", "", i); j.textContent = ch; return { o, i, j }; };
+        [...a].forEach((ch, i) => { const l = mk(ch); l.ia = i; if (i >= c.ia && i < c.ia + c.len) { l.ib = c.ib + i - c.ia; shared.push(l); } else outs.push(l); });
+        [...b].forEach((ch, j) => { if (j >= c.ib && j < c.ib + c.len) return; const l = mk(ch); l.ib = j; ins.push(l); });
+        const m = { box, shared, outs, ins, a, b, fs: size, la: null, lb: null };
+        const fit = () => {
+          let fs = size; const wmax = Math.max(layout(a, fs).width, layout(b, fs).width);
+          if (wmax > maxW) fs *= maxW / wmax;
+          box.style.fontSize = fs + "px"; m.fs = fs;
+          const la = layout(a, fs), lb = layout(b, fs); m.la = la; m.lb = lb;
+          const set = (l, xa, xb) => { l.o.style.setProperty("--xa", xa); l.o.style.setProperty("--xb", xb); };
+          shared.forEach(l => set(l, la.xs[l.ia], lb.xs[l.ib]));
+          outs.forEach(l => set(l, la.xs[l.ia], la.xs[l.ia]));
+          ins.forEach(l => set(l, lb.xs[l.ib], lb.xs[l.ib]));
+        };
+        fits.push(fit); fit();
+        m.inA = [...outs, ...shared].sort((p, q) => p.ia - q.ia);
+        m.inB = [...shared, ...ins].sort((p, q) => p.ib - q.ib);
+        return m;
+      }
+      const makeWord = (parent, w, y, size, maxW) => makeMorph(parent, w, w, y, size, maxW);
+      // A free glyph that sits on a word's baseline at a measured x.
+      const glyph = (box, ch, cls) => { const o = el("div", "ch " + (cls || ""), box), i = el("span", "", o), j = el("span", "", i); j.textContent = ch; return { o, i, j }; };
+
+      // ================= beats =================
+      // [start, end] per beat. Overlaps are deliberate where one beat wipes off another.
+      const WIN = [[0, 1.0], [1.0, 2.25], [2.25, 3.47], [3.45, 4.6], [4.6, 5.8], [5.8, 6.55], [6.36, 8.02], [8.0, 9.4], [9.4, 10.45], [10.45, 11.45], [11.45, 13.25], [13.25, 14.5]];
+      const beats = WIN.map(() => el("section", "beat"));
+      beats[5].style.zIndex = 2;
+
+      // B0 · lockup, letters fold into the spark, spark retracts to its disc
+      const b0 = beats[0];
+      const lock0 = el("div", "pt", b0, { left: "540px", top: "960px" });
+      const w0 = makeWord(lock0, MARK, 70, 172, 680); w0.box.style.left = "0px";
+      const sp0 = makeSpark(b0, 0, 0, 80, { travel: true });
+
+      // B1 · ring draws, a snowflake in a disc, spark becomes a six-point star, grid of flakes
+      const b1 = beats[1];
+      const g1 = el("div", "abs", b1, { left: 0, top: 0, width: "1080px", height: "1920px" });
+      const disc1 = el("div", "disc-mask", g1, { left: "240px", top: "660px", width: "600px", height: "600px" });
+      const st1a = el("div", "stack", disc1), st1b = el("div", "stack", disc1);
+      const fl1a = img("flake-05.webp", st1a, { width: "560px", height: "560px" }, "ink");
+      const fl1b = img("flake-08.webp", st1b, { width: "600px", height: "600px" }, "ink");
+      const ring1 = stroke(svg(g1), arcD(540, 960, 318, -120, 359.9), "line", 9);
+      const star1 = makeSpark(g1, 540, 960, 150);
+      const gridSlots = [[-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1], [-1, -2], [0, -2], [1, -2], [-1, 2], [0, 2], [1, 2]];
+      const gridFiles = ["01", "02", "03", "04", "06", "07", "09", "10", "11", "12", "03", "07", "02", "10"];
+      const gridFlakes = gridSlots.map(([cx, cy], i) => { const f = el("div", "flake", b1, { left: 540 + cx * 300 + "px", top: 960 + cy * 300 + "px" }); img(`flake-${gridFiles[i]}.webp`, f, {}, "ink"); return f; });
+
+      // B2 · "ask?" > "task", two small engravings around it
+      const b2 = beats[2];
+      const kep = img("kepler.webp", b2, { left: "96px", top: "430px", width: "300px" }, "abs ink");
+      const poly = img("polyhedron.webp", b2, { left: "660px", top: "1150px", width: "330px" }, "abs ink");
+      const m1 = makeMorph(b2, M1[0], M1[1], 1040, 260, 860);
+      const q1 = glyph(m1.box, "?", "accent");
+      const under1 = brush(m1.box, "M 2 40 C 30 75, 70 80, 98 28", 18);
+      fits.push(() => {
+        q1.o.style.setProperty("--xa", m1.la.width / 2 + m1.fs * .04); q1.o.style.setProperty("--xb", m1.la.width / 2 + m1.fs * .04);
+        under1.place(-m1.lb.width / 2 - 10, m1.fs * .06, m1.lb.width + 20, m1.fs * .16);
+      });
+
+      // B3 · Dürer's rhinoceros, a painted loop round the horn, push in through it
+      const b3 = beats[3];
+      const rhino = el("div", "abs", b3, { left: "60px", top: "585px", width: "960px", height: "754px" });
+      img("rhinoceros.webp", rhino, { width: "960px" }, "ink");
+      const horn = stroke(svg(rhino, 960, 754), "M 886 520 C 955 470, 935 372, 858 362 C 772 352, 738 432, 768 492 C 800 556, 892 548, 915 488 C 928 455, 920 430, 902 412", "paint", 10);
+      const eye = dot(rhino, 829, 442, 20);
+
+      // B4 · Muybridge zoetrope with a live horse in the middle
+      const b4 = beats[4];
+      const ring4 = el("div", "pt", b4, { left: "540px", top: "960px" });
+      const horses = Array.from({ length: 12 }, (_, i) => {
+        const h = el("div", "horse", ring4, { transform: `rotate(${i * 30}deg) translateY(-400px)` });
+        return img(`horse-${String(i + 1).padStart(2, "0")}.webp`, h, {}, "ink");
+      });
+      const live = el("div", "pt", b4, { left: "540px", top: "960px" });
+      const liveFrames = Array.from({ length: 17 }, (_, i) => img(`horse-${String(i % 11 + 1).padStart(2, "0")}.webp`, live, { position: "absolute", width: "440px", left: "-220px", top: "-118px", opacity: 0 }, "ink"));
+      const dot4 = dot(b4, 540, 960, 24);
+
+      // B5 · ink flash: Vesalius skeleton, measured
+      const b5 = beats[5];
+      el("div", "bleed", b5, { background: "var(--textColor)" });
+      const skel = img("skeleton.webp", b5, { left: "296px", top: "500px", height: "900px", filter: "invert(1) grayscale(1) contrast(1.2)", mixBlendMode: "screen" }, "abs");
+      const s5 = svg(b5);
+      const rule5 = stroke(s5, "M 250 1460 L 830 1460", "line", 5); rule5.style.stroke = "var(--bgColor)";
+      const ticks5 = [250, 395, 540, 685, 830].map(x => { const p = stroke(s5, `M ${x} 1460 L ${x} 1430`, "line", 5); p.style.stroke = "var(--bgColor)"; return p; });
+      const dot5 = dot(b5, 0, 0, 26);
+      // skull centre in the skeleton plate (image is 1084x1500 at 900 px tall)
+      dot5.style.left = 296 + 900 * 1084 / 1500 * .40 - 13 + "px"; dot5.style.top = 500 + 900 * .095 - 13 + "px";
+
+      // B6 · ruled lines, two marble heads, "draft" > "craft"
+      const b6 = beats[6];
+      const s6 = svg(b6);
+      const rules = [700, 860, 1020, 1180, 1340].map(y => { const p = stroke(s6, `M -820 ${y} L 1900 ${y}`, "line", 2.5); p.style.opacity = .3; return p; });
+      const heads = el("div", "abs", b6, { left: 0, top: 0, width: "1080px", height: "1920px" });
+      const headF = img("head-front.webp", heads, { left: "310px", top: "560px", width: "460px" }, "abs");
+      const headP = img("head-profile.webp", heads, { left: "250px", top: "560px", width: "560px", opacity: 0 }, "abs");
+      const tick6 = stroke(svg(heads), "M 700 905 C 712 880, 722 860, 742 830", "paint", 14);
+      const m2 = makeMorph(b6, M2[0], M2[1], 1180, 250, 900);
+      const strike = brush(m2.box, "M 2 62 C 30 40, 66 52, 98 30", 16);
+      const hint = glyph(m2.box, (m2.ins[0] || m2.shared[0]).j.textContent, "accent");
+      hint.o.style.fontStyle = "italic"; hint.o.style.fontWeight = 500;
+      const caret = brush(m2.box, "M 4 96 L 50 8 L 96 96", 12);
+      fits.push(() => {
+        const out = m2.outs[0], inn = m2.ins[0];
+        if (out) strike.place(m2.la.xs[out.ia] - m2.fs * .08, -m2.fs * .5, m2.la.ws[out.ia] + m2.fs * .16, m2.fs * .24);
+        const at = inn ? m2.lb.xs[inn.ib] : m2.lb.xs[0], aw = inn ? m2.lb.ws[inn.ib] : m2.lb.ws[0];
+        hint.o.style.setProperty("--xa", at); hint.o.style.setProperty("--xb", at);
+        caret.place(at + aw / 2 - m2.fs * .09, m2.fs * .1, m2.fs * .18, m2.fs * .13);
+      });
+
+      // B7 · Pacioli's C, its construction rays become the spark, the spark turns in 3D
+      const b7 = beats[7];
+      const cWrap = el("div", "abs", b7, { left: "120px", top: "560px", width: "840px" });
+      const cImg = img("letter-c.webp", cWrap, { width: "840px" }, "ink");
+      const flat7 = makeSpark(b7, 540, 960, 230);
+      const cube = el("div", "pt", b7, { left: "540px", top: "960px", perspective: "1700px" });
+      const rot = el("div", "pt", cube, { left: 0, top: 0, transformStyle: "preserve-3d", opacity: 0 });
+      const LAYERS = 18;
+      for (let i = 0; i < LAYERS; i++) {
+        // faces in the accent, the edge darkens toward the middle of the extrusion
+        const depth = 1 - Math.abs(i - (LAYERS - 1) / 2) / ((LAYERS - 1) / 2);
+        const fill = i && i < LAYERS - 1 ? `color-mix(in srgb, ${ACC} ${88 - depth * 20}%, #000)` : ACC;
+        const L = el("div", "pt", rot, { transform: `translateZ(${(LAYERS / 2 - i) * 2.6}px)`, transformStyle: "preserve-3d" });
+        makeSpark(L, 0, 0, 230, { fill });
+      }
+
+      // B8 · two Rodin hands hold the spark, an orbit draws around it
+      const b8 = beats[8];
+      const reach = img("hand-reach.webp", b8, { left: "330px", top: "560px", width: "760px" }, "abs");
+      const fist = img("hand-fist.webp", b8, { left: "345px", top: "1010px", width: "390px" }, "abs");
+      const sp8 = makeSpark(b8, 540, 950, 80);
+      const ORBIT = "M 290 960 C 290 885, 790 885, 790 960 C 790 1035, 290 1035, 290 960";
+      const orbit = stroke(svg(b8), ORBIT, "line", 4);
+      const rider8 = el("div", "dot", b8, { left: "-11px", top: "-11px", width: "22px", height: "22px", offsetPath: `path("${ORBIT}")`, offsetRotate: "0deg", offsetDistance: "0%" });
+
+      // B9 · a big open circle, images flash inside it, a dot rides the arc
+      const b9 = beats[9];
+      const disc9 = el("div", "disc-mask", b9, { left: "160px", top: "580px", width: "760px", height: "760px" });
+      const flashSet = [["moonjar.webp", 470, 1], ["botanical.webp", 600, 1], ["kepler.webp", 560, 1], ["polyhedron.webp", 600, 1], ["head-profile.webp", 520, 0], ["letter-a.webp", 640, 1]];
+      const flashes = flashSet.map(([f, w, ink]) => { const st = el("div", "stack", disc9, { opacity: 0 }); img(f, st, { width: w + "px" }, ink ? "ink" : ""); return st; });
+      const ARC9 = arcD(540, 960, 400, -30, 300);
+      const arc9 = stroke(svg(b9), ARC9, "line", 8);
+      const rider9 = el("div", "dot", b9, { left: "-15px", top: "-15px", width: "30px", height: "30px", offsetPath: `path("${ARC9}")`, offsetRotate: "0deg", offsetDistance: "0%" });
+
+      // B10 · "think" > "ink" > tagline
+      const b10 = beats[10];
+      const m3 = makeMorph(b10, M3[0], M3[1], 1050, 270, 900);
+      const m4 = makeMorph(b10, M3[1], TAG[1], 1130, 210, 940);
+      const tag1 = makeWord(b10, TAG[0], 905, 210, 900);
+      const endsWithStop = /[.!?]$/.test(TAG[1]);
+      const stop = endsWithStop ? m4.inB[m4.inB.length - 1] : null;
+      if (stop) stop.o.classList.add("accent");
+      // "ink" shrinks and drops onto the tagline baseline: --q runs 0 to 1
+      m3.box.style.transformOrigin = "0 0";
+      m3.box.style.transform = "translateY(calc(var(--q, 0) * 80px)) scale(calc(1 + (var(--k, 1) - 1) * var(--q, 0)))";
+      fits.push(() => m3.box.style.setProperty("--k", m4.fs / m3.fs));
+
+      // B11 · the tagline's full stop becomes the spark, the wordmark wipes in
+      const b11 = beats[11];
+      const lock = el("div", "pt", b11, { left: "540px", top: "960px" });
+      const w11 = makeWord(lock, MARK, 70, 172, 680); w11.box.style.left = "0px";
+      const wipe = el("div", "abs", lock, { top: "-120px", height: "240px", background: "var(--bgColor)", transformOrigin: "100% 50%" });
+      const sp11 = makeSpark(b11, 0, 0, 80, { travel: true });
+
+      // Lockup geometry depends on the wordmark width: spark left of the word, pair centred.
+      fits.push(() => {
+        const fs = w11.fs, wordW = w11.la.width, gap = 160 + fs * .2, total = gap + wordW;
+        const sx = 540 - total / 2 + 80, wx = 540 - total / 2 + gap + wordW / 2;
+        lock.style.left = lock0.style.left = wx + "px";
+        Object.assign(wipe.style, { left: -wordW / 2 - fs * .25 + "px", width: wordW + fs * .5 + "px" });
+        const setT = (sp, fx, fy, tx, ty) => { for (const [k, v] of Object.entries({ fx, fy, tx, ty })) sp.el.style.setProperty("--" + k, v); };
+        setT(sp0, sx, 960, 540, 960);
+        // full stop centre on the tagline line, or the line's end when there is no stop
+        const px = stop ? 540 + m4.lb.xs[stop.ib] + m4.lb.ws[stop.ib] * .45 : 540 + m4.lb.width / 2, py = 1130 - m4.fs * .07;
+        setT(sp11, px, py, sx, 960);
+      });
+      const fitAll = () => fits.forEach(f => f());
+      fitAll();
+      document.fonts?.ready.then(fitAll);
+
+      // ================= timeline =================
+      const tl = gsap.timeline({ paused: true });
+      // Visible only inside (0, 1) of its window. Window tweens start a hair early so the
+      // first frame of a beat is never blank.
+      const inside = p => (p > 0 && p < 1 ? 1 : 0);
+      beats.forEach((b, i) => {
+        const [t0, t1] = WIN[i];
+        tl.fromTo(b, { autoAlpha: 0 }, { autoAlpha: 1, duration: t1 - t0 + (i ? 1e-4 : 0), ease: i ? inside : (p => (p < 1 ? 1 : 0)), immediateRender: true }, i ? t0 - 1e-4 : 0);
+      });
+      const flick = (els, at, hold) => els.forEach((e, i) => tl.fromTo(e, { opacity: 0 }, { opacity: 1, duration: hold, ease: inside, immediateRender: true }, at + i * hold - 1e-4));
+      const draw = (p, at, dur, ease = "power2.inOut") => tl.fromTo(p, { strokeDashoffset: 1.05 }, { strokeDashoffset: 0, duration: dur, ease }, at);
+      const pop = (e, at, dur = .24) => tl.fromTo(e, { scale: 0 }, { scale: 1, duration: dur, ease: "back.out(3)" }, at);
+      const grow = (sp, at, dur, from = 0, stagger = .012) => sp.rays.forEach((r, i) => tl.fromTo(r, { scaleY: from }, { scaleY: 1, duration: dur, ease: E }, at + i * stagger));
+      const E = "expo.out", EIO = "expo.inOut", P4 = "power4.out", P3I = "power3.in";
+
+      // B0 0.00-1.00
+      grow(sp0, 0, .5);
+      tl.fromTo(sp0.el, { rotation: -80 }, { rotation: 0, duration: .75, ease: E }, 0);
+      w0.inA.forEach((l, i) => tl.fromTo(l.i, { yPercent: 70, opacity: 0 }, { yPercent: 0, opacity: 1, duration: .45, ease: P4 }, .06 + i * .035));
+      tl.fromTo(lock0, { x: 0, scaleX: 1, opacity: 1 }, { x: -240, scaleX: .15, opacity: 0, duration: .26, ease: P3I }, .6);
+      tl.fromTo(sp0.el, { "--c": 0 }, { "--c": 1, duration: .34, ease: EIO }, .62);
+      sp0.lens.forEach((l, i) => tl.fromTo(l, { scaleY: 1 }, { scaleY: 0, duration: .22, ease: P3I }, .66 + i * .006));
+
+      // B1 1.00-2.25
+      draw(ring1, 1.0, .4, EIO);
+      tl.fromTo(disc1, { scale: 0 }, { scale: 1, duration: .45, ease: E }, 1.0);
+      tl.fromTo(fl1a, { rotation: -50, scale: 1.4 }, { rotation: 0, scale: 1, duration: .5, ease: E }, 1.0);
+      star1.rays.forEach((r, i) => tl.fromTo(r, { scaleY: 0 }, { scaleY: i % 2 ? .4 : 1, duration: .4, ease: E }, 1.06 + (i % 2) * .05));
+      tl.fromTo(star1.el, { rotation: -60, scale: 1 }, { rotation: 30, scale: .8, duration: .9, ease: E }, 1.06);
+      tl.fromTo(st1a, { opacity: 1 }, { opacity: 0, duration: .01 }, 1.44);
+      tl.fromTo(st1b, { opacity: 0 }, { opacity: 1, duration: .01 }, 1.44);
+      tl.fromTo(fl1b, { rotation: 24, scale: 1.12 }, { rotation: 0, scale: 1, duration: .5, ease: E }, 1.44);
+      tl.fromTo(g1, { scale: 1, transformOrigin: "540px 960px" }, { scale: .44, duration: .32, ease: EIO }, 1.64);
+      gridFlakes.forEach((f, i) => tl.fromTo(f, { scale: 0, rotation: -60 }, { scale: 1, rotation: 0, duration: .34, ease: "back.out(1.6)" }, 1.74 + i * .014));
+      tl.fromTo(b1, { scale: 1, transformOrigin: "540px 960px" }, { scale: 5, duration: .25, ease: P3I }, 2.0);
+
+      // B2 2.25-3.47
+      tl.fromTo([kep, poly], { scale: 0, rotation: i => (i ? 14 : -14) }, { scale: 1, rotation: 0, duration: .42, ease: E, stagger: .08 }, 2.25);
+      m1.inA.forEach((l, i) => tl.fromTo(l.i, { yPercent: 90, opacity: 0 }, { yPercent: 0, opacity: 1, duration: .36, ease: P4 }, 2.25 + i * .04));
+      tl.fromTo(q1.i, { rotation: -40, scale: 0 }, { rotation: 0, scale: 1, duration: .34, ease: "back.out(2.2)" }, 2.4);
+      tl.fromTo(q1.j, { y: 0, rotation: 0 }, { y: 140, rotation: 80, duration: .26, ease: P3I }, 2.78);
+      tl.fromTo(q1.o, { opacity: 1 }, { opacity: 0, duration: .2 }, 2.8);
+      m1.shared.forEach(l => tl.fromTo(l.o, { "--p": 0 }, { "--p": 1, duration: .42, ease: EIO }, 2.8));
+      m1.outs.forEach(l => tl.fromTo(l.o, { opacity: 1 }, { opacity: 0, duration: .15 }, 2.8));
+      m1.ins.forEach((l, i) => tl.fromTo(l.i, { yPercent: -110, scale: .4, opacity: 0, color: ACC }, { yPercent: 0, scale: 1, opacity: 1, color: INK, duration: .42, ease: E }, 2.9 + i * .04));
+      draw(under1.path, 3.0, .28, "power2.out");
+      tl.fromTo(m1.box, { y: 0, opacity: 1 }, { y: -220, opacity: 0, duration: .2, ease: P3I }, 3.27);
+      tl.fromTo([kep, poly], { opacity: 1, y: 0 }, { opacity: 0, y: i => (i ? 260 : -260), duration: .2, ease: P3I }, 3.27);
+      tl.fromTo(under1.svg, { opacity: 1 }, { opacity: 0, duration: .1 }, 3.3);
+
+      // B3 3.45-4.60
+      tl.fromTo(rhino, { scale: 1.4, rotation: -5, transformOrigin: "50% 50%" }, { scale: 1, rotation: 0, duration: .6, ease: E }, 3.45);
+      pop(eye, 3.64);
+      draw(horn, 3.7, .36);
+      tl.fromTo(b3, { scale: 1, transformOrigin: "905px 1040px" }, { scale: 10, duration: .44, ease: "expo.in" }, 4.16);
+
+      // B4 4.60-5.80
+      horses.forEach((h, i) => tl.fromTo(h, { scale: 0, opacity: 0 }, { scale: 1, opacity: 1, duration: .3, ease: E }, 4.6 + i * .018));
+      tl.fromTo(ring4, { rotation: 45, scale: 1.3 }, { rotation: -60, scale: 1, duration: 1.18, ease: "power2.out" }, 4.6);
+      flick(liveFrames, 4.6, .07);
+      tl.fromTo(live, { scale: .5 }, { scale: 1, duration: .5, ease: E }, 4.6);
+      pop(dot4, 4.7, .2);
+      tl.fromTo(b4, { scale: 1, transformOrigin: "540px 960px" }, { scale: .08, duration: .22, ease: P3I }, 5.58);
+
+      // B5 5.80-6.55
+      tl.fromTo(skel, { y: 180, scale: 1.12 }, { y: 0, scale: 1, duration: .5, ease: E }, 5.8);
+      draw(rule5, 5.9, .3, "power2.out");
+      ticks5.forEach((t, i) => draw(t, 6.0 + i * .03, .12, "none"));
+      pop(dot5, 5.98, .22);
+      tl.fromTo(b5, { yPercent: 0 }, { yPercent: -100, duration: .2, ease: P3I }, 6.35);
+
+      // B6 6.36-8.02
+      rules.forEach((r, i) => draw(r, 6.4 + i * .03, .36, "power3.out"));
+      tl.fromTo(headF, { y: 520, rotation: 8 }, { y: 0, rotation: 0, duration: .4, ease: E }, 6.42);
+      tl.fromTo(headF, { opacity: 1 }, { opacity: 0, duration: .01 }, 6.86);
+      tl.fromTo(headP, { opacity: 0 }, { opacity: 1, duration: .01 }, 6.86);
+      tl.fromTo(headP, { x: 40, scale: 1.05 }, { x: 0, scale: 1, duration: .32, ease: E }, 6.86);
+      draw(tick6, 6.96, .14, "power2.out");
+      tl.fromTo(heads, { y: 0 }, { y: -1700, duration: .22, ease: P3I }, 7.12);
+      m2.inA.forEach((l, i) => tl.fromTo(l.i, { opacity: 0, scale: 1.25 }, { opacity: 1, scale: 1, duration: .08 }, 7.22 + i * .035));
+      draw(strike.path, 7.44, .16, "power2.out");
+      tl.fromTo(hint.i, { opacity: 0, y: -40 }, { opacity: 1, y: -300, duration: .16, ease: "power2.out" }, 7.48);
+      m2.outs.forEach(l => tl.fromTo(l.j, { y: 0, rotation: 0 }, { y: 170, rotation: -24, duration: .24, ease: P3I }, 7.62));
+      m2.outs.forEach(l => tl.fromTo(l.o, { opacity: 1 }, { opacity: 0, duration: .2 }, 7.64));
+      tl.fromTo(strike.svg, { opacity: 1 }, { opacity: 0, duration: .12 }, 7.62);
+      m2.shared.forEach(l => tl.fromTo(l.o, { "--p": 0 }, { "--p": 1, duration: .3, ease: EIO }, 7.62));
+      tl.fromTo(hint.j, { y: 0 }, { y: 300, duration: .2, ease: "power2.in" }, 7.64);
+      tl.fromTo(hint.o, { opacity: 1 }, { opacity: 0, duration: .01 }, 7.84);
+      m2.ins.forEach(l => tl.fromTo(l.i, { opacity: 0, scale: 1.18 }, { opacity: 1, scale: 1, duration: .16, ease: E }, 7.84));
+      draw(caret.path, 7.84, .1, "none");
+      tl.fromTo(b6, { x: 0 }, { x: -1300, duration: .18, ease: P3I }, 7.84);
+
+      // B7 8.00-9.40
+      tl.fromTo(cWrap, { scale: 1.15, opacity: 0 }, { scale: 1, opacity: 1, duration: .4, ease: E }, 8.0);
+      grow(flat7, 8.22, .34, 0, .016);
+      tl.fromTo(flat7.el, { rotation: -25 }, { rotation: 0, duration: .45, ease: E }, 8.22);
+      tl.fromTo(cImg, { opacity: 1 }, { opacity: 0, duration: .2 }, 8.48);
+      tl.fromTo(flat7.el, { opacity: 1 }, { opacity: 0, duration: .01 }, 8.66);
+      tl.fromTo(rot, { opacity: 0 }, { opacity: 1, duration: .01 }, 8.66);
+      tl.fromTo(rot, { rotationY: 0, rotationX: 0, rotationZ: 0 }, { rotationY: 360, rotationX: 24, rotationZ: -30, duration: .68, ease: "power3.inOut" }, 8.66);
+      tl.fromTo(cube, { scale: 1, y: 0 }, { scale: .35, y: -10, duration: .3, ease: P3I }, 9.1);
+
+      // B8 9.40-10.45
+      tl.fromTo(reach, { x: 640, rotation: 10 }, { x: 0, rotation: 0, duration: .45, ease: E }, 9.4);
+      tl.fromTo(fist, { y: 640 }, { y: 0, duration: .45, ease: E }, 9.44);
+      grow(sp8, 9.4, .36, .25);
+      tl.fromTo(sp8.el, { rotation: 0 }, { rotation: 150, duration: 1.0, ease: "power2.out" }, 9.4);
+      draw(orbit, 9.58, .45);
+      tl.fromTo(rider8, { offsetDistance: "0%" }, { offsetDistance: "100%", duration: .6, ease: "power1.inOut" }, 9.58);
+      tl.fromTo(b8, { scale: 1, transformOrigin: "540px 950px" }, { scale: 8, duration: .3, ease: "expo.in" }, 10.15);
+
+      // B9 10.45-11.45
+      draw(arc9, 10.45, .32, EIO);
+      tl.fromTo(disc9, { scale: .2 }, { scale: 1, duration: .38, ease: E }, 10.45);
+      flick(flashes, 10.47, .16);
+      tl.fromTo(flashes, { scale: 1.14 }, { scale: 1, duration: .5, ease: "power2.out" }, 10.47);
+      tl.fromTo(rider9, { offsetDistance: "0%" }, { offsetDistance: "100%", duration: .88, ease: "power2.inOut" }, 10.47);
+      tl.fromTo(b9, { scale: 1, rotation: 0, transformOrigin: "540px 960px" }, { scale: 0, rotation: 120, duration: .2, ease: P3I }, 11.25);
+
+      // B10 11.45-13.25: tagline is complete by 12.72 and holds
+      m3.inA.forEach((l, i) => tl.fromTo(l.i, { yPercent: 80, opacity: 0 }, { yPercent: 0, opacity: 1, duration: .28, ease: P4 }, 11.45 + i * .03));
+      m3.outs.forEach((l, i) => tl.fromTo(l.j, { y: 0, rotation: 0 }, { y: -280, rotation: -18, duration: .28, ease: P3I }, 11.68 + i * .03));
+      m3.outs.forEach((l, i) => tl.fromTo(l.o, { opacity: 1 }, { opacity: 0, duration: .24 }, 11.7 + i * .03));
+      m3.shared.forEach(l => tl.fromTo(l.o, { "--p": 0 }, { "--p": 1, duration: .28, ease: EIO }, 11.7));
+      tl.fromTo(m3.box, { "--q": 0 }, { "--q": 1, duration: .24, ease: EIO }, 11.95);
+      tl.fromTo(m3.box, { opacity: 1 }, { opacity: 0, duration: .01 }, 12.19);
+      m4.shared.forEach(l => tl.fromTo(l.i, { opacity: 0 }, { opacity: 1, duration: .01 }, 12.19));
+      m4.outs.forEach(l => tl.fromTo(l.i, { opacity: 0 }, { opacity: 0, duration: .01 }, 12.19));
+      m4.shared.forEach(l => tl.fromTo(l.o, { "--p": 0 }, { "--p": 1, duration: .26, ease: EIO }, 12.19));
+      m4.ins.forEach((l, i) => tl.fromTo(l.i, { yPercent: 70, opacity: 0 }, { yPercent: 0, opacity: 1, duration: .26, ease: P4 }, 12.27 + i * .02));
+      tag1.inA.forEach((l, i) => tl.fromTo(l.i, { yPercent: -60, opacity: 0 }, { yPercent: 0, opacity: 1, duration: .3, ease: P4 }, 12.25 + i * .03));
+      [...tag1.inA, ...m4.inB].filter(l => l !== stop).forEach((l, i) => tl.fromTo(l.o, { opacity: 1 }, { opacity: 0, duration: .1 }, 13.15 + (i % 5) * .01));
+
+      // B11 13.25-14.50: lockup is complete by 14.0 and holds
+      tl.fromTo(sp11.el, { "--c": 0, rotation: -140 }, { "--c": 1, rotation: 0, duration: .55, ease: EIO }, 13.25);
+      grow(sp11, 13.27, .4, 0, .01);
+      tl.fromTo(wipe, { scaleX: 1 }, { scaleX: 0, duration: .45, ease: EIO }, 13.56);
+      w11.inA.forEach((l, i) => tl.fromTo(l.i, { x: -40 }, { x: 0, duration: .5, ease: E }, 13.56 + i * .025));
+      tl.to({}, { duration: .001 }, 14.499);
+
+      root.dataset.posterTime = "14.3";
+      window.__timelines = window.__timelines || {};
+      window.__timelines["claude-engraving-ad"] = tl;
+    </script>
+  </body>
+</html>
